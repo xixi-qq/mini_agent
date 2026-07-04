@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .debug_log import log_llm_error, log_llm_raw, log_parse_error
 from .llm import LLMClient
 from .memory import ContextManager
 from .parser import OutputParser
@@ -10,9 +11,9 @@ from .session import SessionStore
 from .trace import record_trace
 from .tools import tools, Tools
 
-SYSTEM_PROMPT = """你是一个最小化 Agent 运行时。
-判断应该直接回答用户，还是调用一个工具。
-只能返回 JSON，不要返回 Markdown。
+SYSTEM_PROMPT = """你是一个有用的小助手。
+你需要判断能否直接回答用户，还是调用一个工具。
+- 每次回答只能返回 JSON！
 
 允许的格式：
 {"type":"tool_call","thought":"说明为什么需要工具","tool_name":"calculator","arguments":{"expression":"2+2"}}
@@ -44,10 +45,16 @@ class AgentRuntime:
         self.context.update_preferences_from_text(session, user_input)
 
         for _ in range(self.max_steps):
-            raw = self.llm.invoke(self._build_messages(session))
+            try:
+                raw = self.llm.invoke(self._build_messages(session))
+                log_llm_raw(session_id, user_input, raw)
+            except Exception as exc:
+                log_llm_error(session_id, user_input, exc)
+                raise
             try:
                 decision = self.parser.parse(raw)
             except Exception as exc:
+                log_parse_error(session_id, user_input, raw, exc)
                 answer = f"模型输出格式错误，无法继续执行：{exc}"
                 self.sessions.append_message(session, "assistant", answer)
                 return answer
